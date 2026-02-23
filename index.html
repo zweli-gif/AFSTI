@@ -3804,5 +3804,151 @@ document.addEventListener('DOMContentLoaded',function(){
   });
 });
 </script>
+
+<!-- FIREBASE REALTIME INTEGRATION -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyArbaBxkn-wsC6zCx8T-vELTdbqOfpA8aM",
+    authDomain: "afsti-a7d70.firebaseapp.com",
+    projectId: "afsti-a7d70",
+    storageBucket: "afsti-a7d70.firebasestorage.app",
+    messagingSenderId: "1055284325228",
+    appId: "1:1055284325228:web:8ee768d6b8009bf367a149"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  async function fbSaveVote(cardId, initials, verdict) {
+    var ref = doc(db, "votes", cardId);
+    var snap = await getDoc(ref);
+    var data = snap.exists() ? snap.data() : {};
+    data[initials] = {y: verdict==="y"?1:0, m: verdict==="m"?1:0, n: verdict==="n"?1:0};
+    await setDoc(ref, data, {merge: true});
+  }
+
+  function renderVotes(cardEl, data) {
+    if (!cardEl || !data) return;
+    var yCount=0, mCount=0, nCount=0;
+    Object.entries(data).forEach(function(e) {
+      var n=e[0], v=e[1];
+      yCount+=v.y||0; mCount+=v.m||0; nCount+=v.n||0;
+      var vp = cardEl.querySelector(".vp[data-n=\""+n+"\"]");
+      if (vp) {
+        vp.querySelectorAll(".vb").forEach(function(b){b.classList.remove("voted-y","voted-m","voted-n");});
+        if (v.y) { var by=vp.querySelector(".vb.oy"); if(by) by.classList.add("voted-y"); }
+        if (v.m) { var bm=vp.querySelector(".vb.om"); if(bm) bm.classList.add("voted-m"); }
+        if (v.n) { var bn=vp.querySelector(".vb.on"); if(bn) bn.classList.add("voted-n"); }
+      }
+    });
+    var vr = cardEl.querySelector(".vr");
+    if (vr && (yCount+mCount+nCount)>0) {
+      vr.innerHTML = "<span style=\"color:#006B54;font-weight:700\">\u2713 "+yCount+"</span> <span style=\"color:#F7B500;font-weight:700\">? "+mCount+"</span> <span style=\"color:#c00;font-weight:700\">\u2717 "+nCount+"</span>";
+    }
+  }
+
+  ["ic1","ic2","ic3","ic4","ic5","ic6","ic7","ic8","ic9"].forEach(function(cardId) {
+    var cardEl = document.getElementById(cardId);
+    if (!cardEl) return;
+    onSnapshot(doc(db, "votes", cardId), function(snap) {
+      if (snap.exists()) renderVotes(cardEl, snap.data());
+    });
+  });
+
+  var _origCv = window.cv;
+  window.cv = function(btn, verdict) {
+    if (_origCv) _origCv(btn, verdict);
+    var vp = btn.closest(".vp");
+    var card = btn.closest(".card");
+    if (vp && card && card.id) fbSaveVote(card.id, vp.dataset.n, verdict).catch(console.error);
+  };
+
+  async function fbSaveQA(key, value) {
+    var docId = key.replace(/[^a-zA-Z0-9_-]/g, "_");
+    await setDoc(doc(db, "qa", docId), { key: key, data: value });
+  }
+  async function fbGetQA(key) {
+    var docId = key.replace(/[^a-zA-Z0-9_-]/g, "_");
+    var snap = await getDoc(doc(db, "qa", docId));
+    return snap.exists() ? snap.data().data : null;
+  }
+  var _origSaveQA = window.saveQA;
+  window.saveQA = function(key, val) {
+    if (_origSaveQA) _origSaveQA(key, val);
+    fbSaveQA(key, val).catch(console.error);
+  };
+  var _origGetQA = window.getQA;
+  window.getQA = async function(key) {
+    try { var fbVal = await fbGetQA(key); if (fbVal !== null) return fbVal; } catch(e) {}
+    return _origGetQA ? _origGetQA(key) : null;
+  };
+
+  async function fbSaveObl(key, status) {
+    var docId = key.replace(/[^a-zA-Z0-9_-]/g, "_");
+    await setDoc(doc(db, "obligations", docId), { key: key, status: status });
+  }
+  var _origCycleStatus = window.cycleStatus;
+  window.cycleStatus = function(el) {
+    if (_origCycleStatus) _origCycleStatus(el);
+    var key = el.dataset.key || el.id;
+    var status = el.dataset.status || el.getAttribute("data-status");
+    if (key) fbSaveObl(key, status||"").catch(console.error);
+  };
+  onSnapshot(collection(db, "obligations"), function(snap) {
+    snap.forEach(function(d) {
+      var dt = d.data();
+      document.querySelectorAll("[data-key=\""+dt.key+"\"]").forEach(function(el) {
+        el.dataset.status = dt.status;
+      });
+    });
+    if (window.loadOblStatuses) window.loadOblStatuses();
+  });
+
+  window.fbAddComment = async function(cardId, author, text) {
+    var ref = doc(db, "comments", cardId);
+    var snap = await getDoc(ref);
+    var arr = snap.exists() ? (snap.data().list || []) : [];
+    arr.push({ author: author||"Anonymous", text: text, ts: Date.now() });
+    await setDoc(ref, { list: arr });
+  };
+
+  function injectCommentBox(cardId) {
+    var card = document.getElementById(cardId);
+    if (!card) return;
+    var cs = document.createElement("div");
+    cs.className = "fb-comments";
+    cs.style.cssText = "margin-top:16px;padding:12px 14px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;";
+    cs.innerHTML = '<div style="font-weight:700;font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em">&#x1F4AC; Team Comments</div>'
+      +'<div class="fb-cl" style="max-height:140px;overflow-y:auto;margin-bottom:8px;font-size:12px;line-height:1.5;"></div>'
+      +'<div style="display:flex;gap:6px;align-items:center;">'
+      +'<input class="fb-au" placeholder="Name" style="flex:0 0 90px;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">'
+      +'<input class="fb-tx" placeholder="Leave a comment..." style="flex:1;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">'
+      +'<button class="fb-btn" style="padding:5px 12px;background:#006B54;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">Post</button>'
+      +"</div>";
+    var btn = cs.querySelector(".fb-btn");
+    btn.addEventListener("click", function() {
+      var au = cs.querySelector(".fb-au").value.trim()||"Anonymous";
+      var tx = cs.querySelector(".fb-tx").value.trim();
+      if (!tx) return;
+      window.fbAddComment(cardId, au, tx).catch(console.error);
+      cs.querySelector(".fb-tx").value = "";
+    });
+    card.appendChild(cs);
+    onSnapshot(doc(db, "comments", cardId), function(snap) {
+      var list = snap.exists() ? (snap.data().list||[]) : [];
+      var cl = cs.querySelector(".fb-cl");
+      if (!list.length) { cl.innerHTML = '<div style="color:#94a3b8;font-style:italic">No comments yet.</div>'; return; }
+      cl.innerHTML = list.map(function(c) {
+        return '<div style="padding:3px 0;border-bottom:1px solid #f1f5f9"><strong style="color:#1e293b">'+c.author+'</strong>: '+c.text+"</div>";
+      }).join("");
+      cl.scrollTop = cl.scrollHeight;
+    });
+  }
+  ["ic1","ic2","ic3","ic4","ic5","ic6","ic7","ic8","ic9"].forEach(injectCommentBox);
+  console.log("[AFSTI Firebase] Realtime sync active");
+    </script>
 </body>
 </html>
